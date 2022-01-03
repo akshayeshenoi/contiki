@@ -36,6 +36,7 @@
  *
  */
 
+
 /**
  * \file
  *        Resilient Clustering in Contiki
@@ -43,57 +44,46 @@
  *         Nitin Shivaraman <nitin.shivaraman@tum-create.edu.sg>
  */
 
+
 #include "contiki.h"
-#include "random.h"
 #include "net/rime/rime.h"
 #include "dev/cc2420/cc2420.h"
-#include "lib/list.h"
-#include "lib/memb.h"
 #include "sys/rtimer.h"
 #include "node-id.h"
-#include "apps/powertrace/powertrace.h"
 #include "net/packetbuf.h"
 #include "net/netstack.h"
 #include <stdio.h>
 
-#include "project-conf.h"
+// #include "project-conf.h"
 
 
-#define FIXED_ROOT_TIMEOUT         3      // number of iterations after root is fixed to stop transmission
-#define ERROR_VALID_THRESHOLD      3      // Threshold of error from consensus to initiate sleep
-#define CYCLE_LIMIT                6      // Number of rounds for a non-CH to transmit
-#define NODE_FAIL_LIMIT            6      // Number of cycles to know if there a node failure
-#define ROUND_LIMIT                1      // Number of seconds/transmission window for all nodes to trasmit atleast once
 #define FALSE                      0      // Error state
 #define TRUE                       1      // OK state
-#define PROTOCOL_DISPATCH          0x01   // Identifier for the protocol
 #define UNKNOWN_NODE               0xFF   // Default value of a node
 #define RSSI_THRESHOLD             65     // Signal strength for neighbours
-#define SKEW_ERR_THRESHOLD         10     // The threshold after which consensus is stopped
-#define ROOT_RESET_LIMIT           5      // Iterations to wait if there is a root failure
 #define RSSI_OFFSET                -45    // As mentioned in the datasheet of cc2420
 #define MAX_NEIGHBOURS             64     // Maximum number of neighbour nodes for each node
-#define MAX_ACTIVE                 24     // Maximum number of nodes that is tracked for active nodes
-#define XMISSION_ROUND             1      // Number of rounds each node can complete transmission
-#define XFER_CHANNEL               7      // Channel used for data transfer
+#define XFER_CHANNEL               25      // Channel used for data transfer
 #define EPOCH                      10     // Number of rounds per epoch
+
 // A message is sent every 1.1 seconds by the root
 // #define MIN_INTERVAL CLOCK_SECOND * 0.6
-#define MIN_INTERVAL CLOCK_SECOND * 2
+#define MIN_INTERVAL CLOCK_SECOND * 0.002
 
 /**
  *  Message format
  */
 struct message_t
 {
-    char msg[10];
+    char msg[6];
+    // uint16_t serial_no;
 };
 
-PROCESS(deric_process, "Clustering process");
-AUTOSTART_PROCESSES(&deric_process);
-
+PROCESS(collision_process, "Collision Detection");
+AUTOSTART_PROCESSES(&collision_process);
 
 /*---------------------------------------------------------------------------*/
+
 static void
 broadcast_recv(struct broadcast_conn *c, const linkaddr_t *from)
 {
@@ -104,71 +94,52 @@ broadcast_recv(struct broadcast_conn *c, const linkaddr_t *from)
 
     /* The packetbuf_dataptr() returns a pointer to the first data byte
        in the received packet. */
+
     memcpy(&msg, packetbuf_dataptr(), sizeof(struct message_t));
-    printf("Received RSSI is %d\n", received_rssi);
+    // printf("Received RSSI is %d\n", received_rssi);
 
-    // if(abs(received_rssi) > RSSI_THRESHOLD) {
-    //     // do something 
-    //     printf("BYTE RECV: %s ", msg.msg);
-    //     printf("SIZE RECV: %d\n", packetbuf_datalen());
-    // }
-
-    printf("BYTE RECV: %s", msg.msg);
-    printf("SIZE RECV: %d\n", packetbuf_datalen());
+    if (node_id == 2)
+    printf("BYTE RECV: %s\n", msg.msg);
+    // printf("SIZE RECV: %d\n", packetbuf_datalen());
 }
 
 static const struct broadcast_callbacks broadcast_call = {broadcast_recv};
 static struct broadcast_conn broadcast;
 
 /*---------------------------------------------------------------------------*/
-PROCESS_THREAD(deric_process, ev, data)
+
+PROCESS_THREAD(collision_process, ev, data)
 {
+
   static struct etimer sendtimer;
   static clock_time_t interval;
   struct message_t beacon;
-
-
-  /* Variables for residual energy */
-  // uint16_t seconds=100;// warning: if this variable is changed, then the kinect variable the count the minutes should be changed
-  // double fixed_perc_energy = 0.002;// 0 - 1
-  // uint16_t variation = 2;//0 - 99
-
-
-  // static uint16_t residual = 0;
+  // uint16_t count = 0;
 
   PROCESS_EXITHANDLER(broadcast_close(&broadcast);)
   PROCESS_BEGIN();
 
-  //powertrace_start(CLOCK_SECOND * seconds, seconds, fixed_perc_energy, variation);
-//   powertrace_start(CLOCK_SECOND * 10);
-
   broadcast_open(&broadcast, XFER_CHANNEL, &broadcast_call);
-  // node_id_burn(node_id); // To be used for hardware
-
   interval = MIN_INTERVAL;
 
   while(1)
   {
 
     etimer_set(&sendtimer, interval);
-
     PROCESS_WAIT_UNTIL(etimer_expired(&sendtimer));
+    
+    if(node_id == 1) //1  //60
+      memcpy(&beacon.msg, "NUS!", 5);
+    else if(node_id == 3) //3 //56
+      memcpy(&beacon.msg, "TUM!", 5);
+    else if(node_id == 2) //2 //51
+      memcpy(&beacon.msg, "NTU!", 5);
+    // beacon.serial_no = count++;
 
-    // residual = powertrace_getresidual();
-
-    // if(!residual)
-    // {
-    //     printf("Residual energy of node %d is 0\n", node_id);
-    //     break;
-    // }
-
-    memcpy(&beacon, "Hello!", 6);
-
-    printf("String: %s\n", beacon.msg);
-    /* Send the packet */
     packetbuf_copyfrom(&beacon, sizeof(beacon));
     broadcast_send(&broadcast);
   }
+
   PROCESS_END();
   return 1;
 }

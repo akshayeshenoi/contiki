@@ -49,6 +49,7 @@
 #include "net/packetbuf.h"
 #include "net/rime/rimestats.h"
 #include "net/netstack.h"
+#include "node-id.h"
 
 #define WITH_SEND_CCA 1
 
@@ -145,8 +146,11 @@ PROCESS(cc2420_process, "CC2420 driver");
 #define ADR_DECODE (1 << 11)
 #define RXFIFO_PROTECTION (1 << 9)
 #define CORR_THR(n) (((n) & 0x1f) << 6)
+#define RX_NON_BUFF 2
 #define FIFOP_THR(n) ((n) & 0x7f)
 #define RXBPF_LOCUR (1 << 13);
+
+#define MIN_INTERVAL CLOCK_SECOND * 0.002
 
 int cc2420_on(void);
 int cc2420_off(void);
@@ -479,6 +483,10 @@ getrxdata(uint8_t *buffer, int count)
   for(i = 0; i < count; i++) {
     SPI_READ(buffer[i]);
   }
+
+  if ((count > 10) && (node_id == 2))
+    for(i = 0; i < count; i++) 
+    printf("Receving data as %u\n", buffer[i]);
   clock_delay(1);
   CC2420_SPI_DISABLE();
 }
@@ -661,6 +669,10 @@ cc2420_init(void)
   /* Change default values as recomended in the data sheet, */
   /* correlation threshold = 20, RX bandpass filter = 1.3uA. */
   setreg(CC2420_MDMCTRL1, CORR_THR(20));
+  // reg = getreg(CC2420_MDMCTRL1);
+  // reg |= RX_NON_BUFF;
+  // setreg(CC2420_MDMCTRL1, reg);
+
   reg = getreg(CC2420_RXCTRL1);
   reg |= RXBPF_LOCUR;
   setreg(CC2420_RXCTRL1, reg);
@@ -676,7 +688,7 @@ cc2420_init(void)
 
   flushrx();
 
-  set_poll_mode(0);
+  set_poll_mode(1);
 
   process_start(&cc2420_process, NULL);
   return 1;
@@ -771,6 +783,7 @@ cc2420_transmit(unsigned short payload_len)
   /* If we send with cca (cca_on_send), we get here if the packet wasn't
      transmitted because of other channel activity. */
   RIMESTATS_ADD(contentiondrop);
+  printf("too contentiondrop\n");
   PRINTF("cc2420: do_send() transmission never started\n");
 
   if(packetbuf_attr(PACKETBUF_ATTR_RADIO_TXPOWER) > 0) {
@@ -928,12 +941,21 @@ cc2420_interrupt(void)
 PROCESS_THREAD(cc2420_process, ev, data)
 {
   int len;
+  static struct etimer sendtimer;
+  static clock_time_t interval;
   PROCESS_BEGIN();
 
   PRINTF("cc2420_process: started\n");
+  interval = MIN_INTERVAL;
 
   while(1) {
-    PROCESS_YIELD_UNTIL(!poll_mode && ev == PROCESS_EVENT_POLL);
+    if(!poll_mode) {
+        PROCESS_YIELD_UNTIL(!poll_mode && ev == PROCESS_EVENT_POLL);
+    }
+    else {
+        etimer_set(&sendtimer, interval);
+        PROCESS_WAIT_UNTIL(etimer_expired(&sendtimer));
+    }
 
     PRINTF("cc2420_process: calling receiver callback\n");
 
@@ -966,10 +988,13 @@ cc2420_read(void *buf, unsigned short bufsize)
   if(len > CC2420_MAX_PACKET_LEN) {
     /* Oops, we must be out of sync. */
     RIMESTATS_ADD(badsynch);
+    printf("too badsynch\n");
   } else if(len <= FOOTER_LEN) {
     RIMESTATS_ADD(tooshort);
+    printf("too short\n");
   } else if(len - FOOTER_LEN > bufsize) {
     RIMESTATS_ADD(toolong);
+    printf("too long\n");
   } else {
     getrxdata((uint8_t *) buf, len - FOOTER_LEN);
     getrxdata(footer, FOOTER_LEN);
@@ -988,6 +1013,7 @@ cc2420_read(void *buf, unsigned short bufsize)
       RIMESTATS_ADD(llrx);
     } else {
       RIMESTATS_ADD(badcrc);
+      printf("too badcrc\n");
       len = FOOTER_LEN;
     }
 
